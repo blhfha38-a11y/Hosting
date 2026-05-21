@@ -1,30 +1,35 @@
-import asyncio
 import os
-import sys
 import time
 import threading
+import importlib.util
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict
 
 from flask import Flask
-from pyrogram import Client, filters
-from pyrogram.errors import AccessTokenInvalid, ApiIdInvalid, Unauthorized
-from pyrogram.types import Message
+import telebot
+from telebot import types
 
 # ============================================================
-# ⚠️ ВСТАВЬ СВОИ ДАННЫЕ СЮДА ⚠️
+# ВСТАВЬ СВОИ ДАННЫЕ СЮДА
 # ============================================================
 HOST_BOT_TOKEN = "8867884169:AAG-UkjVW4SThLxFcL7pzt6NweKrz_1RQFI"
-API_ID = 34944645
-API_HASH = "33ff1004a149671057f2e0fa8e6b4aaf"
 # ============================================================
 
+# Папка для кода пользовательских ботов
 BOTS_DIR = Path("hosted_bots")
 BOTS_DIR.mkdir(exist_ok=True)
 
-running_bots: Dict[int, Dict] = {}
+# Хранилище запущенных ботов
+running_bots: Dict[int, dict] = {}
 
-async def check_token(token: str) -> dict:
+# Хост-бот
+bot = telebot.TeleBot(HOST_BOT_TOKEN, threaded=False)
+
+# ============================================================
+# ПРОВЕРКА ТОКЕНА
+# ============================================================
+
+def check_token(token: str) -> dict:
     result = {
         "valid": False,
         "bot_name": None,
@@ -38,171 +43,158 @@ async def check_token(token: str) -> dict:
         return result
 
     try:
-        test_client = Client(
-            "token_check",
-            api_id=API_ID,
-            api_hash=API_HASH,
-            bot_token=token,
-            in_memory=True
-        )
-
-        await test_client.start()
-        bot_info = await test_client.get_me()
-
+        test_bot = telebot.TeleBot(token)
+        bot_info = test_bot.get_me()
+        
         result["valid"] = True
         result["bot_name"] = bot_info.first_name
         result["bot_username"] = bot_info.username
         result["bot_id"] = bot_info.id
-
-        await test_client.stop()
-
-    except (AccessTokenInvalid, Unauthorized):
-        result["error"] = "Токен недействителен или бот удалён"
-    except ApiIdInvalid:
-        result["error"] = "Неверный API_ID/API_HASH"
+        
     except Exception as e:
-        result["error"] = f"Ошибка проверки: {str(e)[:100]}"
-
-    session_file = Path("token_check.session")
-    if session_file.exists():
-        session_file.unlink()
+        error_str = str(e)
+        if "Unauthorized" in error_str or "401" in error_str:
+            result["error"] = "Токен недействителен или бот удалён"
+        else:
+            result["error"] = f"Ошибка проверки: {error_str[:100]}"
 
     return result
+
+# ============================================================
+# ЗАПУСК ПОЛЬЗОВАТЕЛЬСКОГО БОТА
+# ============================================================
 
 def load_bot_code(user_id: int, code: str) -> Path:
     bot_file = BOTS_DIR / f"bot_{user_id}.py"
     bot_file.write_text(code, encoding="utf-8")
     return bot_file
 
-async def run_user_bot(user_id: int, token: str, code: str) -> dict:
-    await stop_user_bot(user_id)
+def run_user_bot(user_id: int, token: str, code: str) -> dict:
+    """Запускает пользовательского бота"""
+    stop_user_bot(user_id)
 
     bot_file = load_bot_code(user_id, code)
 
-    client = Client(
-        f"bot_{user_id}",
-        api_id=API_ID,
-        api_hash=API_HASH,
-        bot_token=token,
-        workdir=str(BOTS_DIR)
-    )
-
     running_bots[user_id] = {
-        "client": client,
         "token": token,
         "bot_file": str(bot_file),
         "started_at": time.time(),
-        "status": "starting"
+        "status": "starting",
+        "thread": None
     }
 
-    async def bot_worker():
+    def bot_worker():
+        user_bot = telebot.TeleBot(token)
+        
         try:
-            await client.start()
-            bot_info = await client.get_me()
+            # Загружаем пользовательский код
+            spec = importlib.util.spec_from_file_location(
+                f"user_bot_{user_id}", bot_file
+            )
+            module = importlib.util.module_from_spec(spec)
+            
+            # Передаём bot в модуль пользователя
+            module.bot = user_bot
+            module.types = types
+            
+            spec.loader.exec_module(module)
+
+            bot_info = user_bot.get_me()
             running_bots[user_id]["status"] = "running"
             running_bots[user_id]["bot_name"] = bot_info.first_name
             running_bots[user_id]["bot_username"] = bot_info.username
 
             print(f"Бот @{bot_info.username} запущен")
 
-            while user_id in running_bots:
-                await asyncio.sleep(1)
+            # Запускаем polling
+            user_bot.infinity_polling(timeout=10, long_polling_timeout=5)
 
         except Exception as e:
             running_bots[user_id]["status"] = "crashed"
             running_bots[user_id]["error"] = str(e)[:200]
             print(f"Бот упал: {e}")
 
-        finally:
-            try:
-                await client.stop()
-            except:
-                pass
-            if user_id in running_bots:
-                running_bots[user_id]["status"] = "stopped"
-
-    task = asyncio.create_task(bot_worker())
-    running_bots[user_id]["task"] = task
+    thread = threading.Thread(target=bot_worker, daemon=True)
+    thread.start()
+    running_bots[user_id]["thread"] = thread
 
     return {"success": True, "message": "Бот запущен"}
 
-async def stop_user_bot(user_id: int) -> bool:
+def stop_user_bot(user_id: int) -> bool:
     if user_id not in running_bots:
         return False
 
     bot_data = running_bots[user_id]
-    bot_data["status"] = "stopping"
+    bot_data["status"] = "stopped"
 
-    if "task" in bot_data:
-        bot_data["task"].cancel()
+    # Останавливаем поток
+    if bot_data.get("thread"):
+        # Принудительно останавливаем через stop_polling
         try:
-            await bot_data["task"]
-        except asyncio.CancelledError:
+            temp_bot = telebot.TeleBot(bot_data["token"])
+            temp_bot.stop_polling()
+        except:
             pass
-
-    try:
-        await bot_data["client"].stop()
-    except:
-        pass
 
     del running_bots[user_id]
 
+    # Удаляем файлы
     session = BOTS_DIR / f"bot_{user_id}.session"
     if session.exists():
         session.unlink()
 
     return True
 
-host_app = Client(
-    "host_bot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    bot_token=HOST_BOT_TOKEN
-)
+# ============================================================
+# КОМАНДЫ ХОСТ-БОТА
+# ============================================================
 
-@host_app.on_message(filters.command("start"))
-async def start_command(_, msg: Message):
-    await msg.reply(
-        "🤖 Бот-хостер\n\n"
+@bot.message_handler(commands=["start"])
+def start_command(msg: types.Message):
+    bot.reply_to(msg, 
+        "🤖 **Бот-хостер**\n\n"
         "/check токен — проверить токен\n"
         "/host — загрузить код бота\n"
         "/stop — остановить бота\n"
-        "/status — статус бота"
+        "/status — статус бота",
+        parse_mode="Markdown"
     )
 
-@host_app.on_message(filters.command("check"))
-async def check_command(_, msg: Message):
+@bot.message_handler(commands=["check"])
+def check_command(msg: types.Message):
     token = msg.text.replace("/check", "").strip()
+    
     if not token:
-        await msg.reply("Укажи токен: /check 123456:ABC-DEF")
+        bot.reply_to(msg, "Укажи токен: /check 123456:ABC-DEF")
         return
 
-    status_msg = await msg.reply("Проверяю...")
-    result = await check_token(token)
+    status_msg = bot.reply_to(msg, "Проверяю...")
+    result = check_token(token)
 
     if result["valid"]:
-        text = f"Токен валиден! Бот: @{result['bot_username']}"
+        text = f"✅ Токен валиден!\nБот: @{result['bot_username']}"
     else:
-        text = f"Ошибка: {result['error']}"
+        text = f"❌ {result['error']}"
 
-    await status_msg.edit(text)
+    bot.edit_message_text(text, msg.chat.id, status_msg.message_id)
 
-@host_app.on_message(filters.command("host"))
-async def host_command(_, msg: Message):
-    await msg.reply(
-        "Отправь:\n\n"
-        "/upload\nТОКЕН\n```python\nКОД\n```"
+@bot.message_handler(commands=["host"])
+def host_command(msg: types.Message):
+    bot.reply_to(msg,
+        "📤 Отправь:\n\n"
+        "/upload\nТОКЕН\n```python\nКОД\n```",
+        parse_mode="Markdown"
     )
 
-@host_app.on_message(filters.command("upload"))
-async def upload_bot(_, msg: Message):
+@bot.message_handler(commands=["upload"])
+def upload_command(msg: types.Message):
     user_id = msg.from_user.id
 
     text = msg.text.replace("/upload", "", 1).strip()
     lines = text.split("\n")
 
     if len(lines) < 3:
-        await msg.reply("Неверный формат")
+        bot.reply_to(msg, "Неверный формат")
         return
 
     token = lines[0].strip()
@@ -214,70 +206,74 @@ async def upload_bot(_, msg: Message):
             raise ValueError("Код не найден")
         code = text[code_start:code_end].strip()
     except:
-        await msg.reply("Код должен быть в ```python ... ```")
+        bot.reply_to(msg, "Код должен быть в ```python ... ```")
         return
 
-    status_msg = await msg.reply("Проверяю...")
-    check = await check_token(token)
+    status_msg = bot.reply_to(msg, "Проверяю...")
+    check = check_token(token)
 
     if not check["valid"]:
-        await status_msg.edit(f"Ошибка: {check['error']}")
+        bot.edit_message_text(f"❌ {check['error']}", msg.chat.id, status_msg.message_id)
         return
 
-    if "from pyrogram" not in code:
-        code = "from pyrogram import Client, filters\nimport asyncio\n\n" + code
+    # Проверка на опасный код
+    dangerous = ["os.system", "subprocess", "eval(", "exec(", "__import__"]
+    for danger in dangerous:
+        if danger in code:
+            bot.edit_message_text(f"❌ Опасный код: {danger}", msg.chat.id, status_msg.message_id)
+            return
 
-    if "app.run()" not in code:
-        code += "\n\napp.run()"
+    # Добавляем базовый код если нужен
+    if "import telebot" not in code and "from telebot" not in code:
+        code = "import telebot\nfrom telebot import types\n\n" + code
 
-    await status_msg.edit(f"Запускаю @{check['bot_username']}...")
-    result = await run_user_bot(user_id, token, code)
+    if "bot.infinity_polling" not in code and "bot.polling" not in code:
+        code += "\n\nbot.infinity_polling()"
+
+    bot.edit_message_text(f"Запускаю @{check['bot_username']}...", msg.chat.id, status_msg.message_id)
+    result = run_user_bot(user_id, token, code)
 
     if result["success"]:
-        await status_msg.edit(f"Бот запущен! /stop /status")
+        bot.edit_message_text(
+            f"✅ Бот запущен!\n\n@{check['bot_username']}\n/stop /status",
+            msg.chat.id, status_msg.message_id
+        )
 
-@host_app.on_message(filters.command("stop"))
-async def stop_bot(_, msg: Message):
+@bot.message_handler(commands=["stop"])
+def stop_command(msg: types.Message):
     user_id = msg.from_user.id
 
     if user_id not in running_bots:
-        await msg.reply("Нет запущенных ботов")
+        bot.reply_to(msg, "Нет запущенных ботов")
         return
 
-    await stop_user_bot(user_id)
-    await msg.reply("Бот остановлен")
+    stop_user_bot(user_id)
+    bot.reply_to(msg, "✅ Бот остановлен")
 
-@host_app.on_message(filters.command("status"))
-async def status_bot(_, msg: Message):
+@bot.message_handler(commands=["status"])
+def status_command(msg: types.Message):
     user_id = msg.from_user.id
 
     if user_id not in running_bots:
-        await msg.reply("Нет запущенных ботов")
+        bot.reply_to(msg, "Нет запущенных ботов")
         return
 
-    bot = running_bots[user_id]
-    uptime = time.time() - bot.get("started_at", 0)
+    bot_data = running_bots[user_id]
+    uptime = time.time() - bot_data.get("started_at", 0)
     hours, rem = divmod(int(uptime), 3600)
     minutes, seconds = divmod(rem, 60)
 
-    await msg.reply(
-        f"Статус\n"
-        f"Бот: @{bot.get('bot_username', '?')}\n"
-        f"Статус: {bot['status']}\n"
+    bot.reply_to(msg,
+        f"📊 Статус\n"
+        f"Бот: @{bot_data.get('bot_username', '?')}\n"
+        f"Статус: {bot_data['status']}\n"
         f"Аптайм: {hours}ч {minutes}м {seconds}с"
     )
 
-async def main():
-    BOTS_DIR.mkdir(exist_ok=True)
+# ============================================================
+# FLASK ДЛЯ RENDER
+# ============================================================
 
-    print("Запуск...")
-    await host_app.start()
-    me = await host_app.get_me()
-    print(f"Бот @{me.username} запущен")
-
-    await asyncio.Event().wait()
-
-# Flask для Render
 flask_app = Flask(__name__)
 
 @flask_app.route("/")
@@ -288,9 +284,18 @@ def run_flask():
     port = int(os.environ.get("PORT", 8080))
     flask_app.run(host="0.0.0.0", port=port)
 
+# ============================================================
+# ЗАПУСК
+# ============================================================
+
 if __name__ == "__main__":
+    print("=" * 40)
+    print("Бот-Хостер v3.0 (telebot)")
+    print("=" * 40)
+
+    # Flask в отдельном потоке
     threading.Thread(target=run_flask, daemon=True).start()
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Остановка...")
+
+    # Запуск хост-бота
+    print("Запуск...")
+    bot.infinity_polling(timeout=10, long_polling_timeout=5) 
