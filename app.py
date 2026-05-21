@@ -80,6 +80,10 @@ def run_user_bot(user_id: int, token: str, code: str) -> dict:
         user_bot = telebot.TeleBot(token)
         
         try:
+            # Удаляем вебхук и старые сессии
+            user_bot.remove_webhook()
+            time.sleep(0.5)
+            
             spec = importlib.util.spec_from_file_location(
                 f"user_bot_{user_id}", bot_file
             )
@@ -137,17 +141,17 @@ def stop_user_bot(user_id: int) -> bool:
 
 @bot.message_handler(commands=["start"])
 def start_command(msg: types.Message):
-    bot.reply_to(msg,
-        "🤖 **Бот-хостер**\n\n"
-        "📋 **Команды:**\n"
-        "/new — загрузить нового бота\n"
-        "/stop — остановить бота\n"
-        "/status — статус бота\n\n"
-        "📤 **Как загрузить:**\n"
-        "1. /new + токен\n"
-        "2. Отправить .py файл с кодом",
-        parse_mode="Markdown"
+    text = (
+        "🤖 Бот-хостер\n\n"
+        "Команды:\n"
+        "/new - загрузить нового бота\n"
+        "/stop - остановить бота\n"
+        "/status - статус бота\n\n"
+        "Как загрузить:\n"
+        "1. /new ТОКЕН\n"
+        "2. Отправить .py файл с кодом"
     )
+    bot.reply_to(msg, text)
 
 @bot.message_handler(commands=["new"])
 def new_bot_command(msg: types.Message):
@@ -156,10 +160,10 @@ def new_bot_command(msg: types.Message):
     token = msg.text.replace("/new", "").strip()
     
     if not token:
-        bot.reply_to(msg, "❌ Отправь: /new ТВОЙ_ТОКЕН")
+        bot.reply_to(msg, "Отправь: /new ТВОЙ_ТОКЕН")
         return
 
-    status_msg = bot.reply_to(msg, "🔍 Проверяю токен...")
+    status_msg = bot.reply_to(msg, "Проверяю токен...")
     check = check_token(token)
 
     if not check["valid"]:
@@ -168,39 +172,33 @@ def new_bot_command(msg: types.Message):
 
     pending_tokens[user_id] = token
     
-    bot.edit_message_text(
+    text = (
         f"✅ Токен @{check['bot_username']} принят!\n\n"
-        f"📤 Теперь **отправь .py файл** с кодом бота.\n\n"
-        f"Пример кода:\n"
-        f"```python\n"
-        f"import telebot\n"
-        f"from telebot import types\n\n"
-        f"@bot.message_handler(commands=['start'])\n"
-        f"def start(msg):\n"
-        f"    bot.reply_to(msg, 'Привет!')\n\n"
-        f"bot.infinity_polling()\n"
-        f"```\n\n"
-        f"⚠️ Отправь именно файл .py, не текст!",
-        msg.chat.id,
-        status_msg.message_id,
-        parse_mode="Markdown"
+        "Теперь отправь .py файл с кодом бота.\n\n"
+        "Пример кода:\n"
+        "@bot.message_handler(commands=['start'])\n"
+        "def start(msg):\n"
+        "    bot.reply_to(msg, 'Привет!')\n\n"
+        "bot.infinity_polling()\n\n"
+        "Отправь именно файл .py, не текст!"
     )
+    bot.edit_message_text(text, msg.chat.id, status_msg.message_id)
 
 @bot.message_handler(content_types=["document"])
 def handle_file(msg: types.Message):
     user_id = msg.from_user.id
 
     if user_id not in pending_tokens:
-        bot.reply_to(msg, "❌ Сначала отправь /new ТВОЙ_ТОКЕН")
+        bot.reply_to(msg, "Сначала отправь /new ТВОЙ_ТОКЕН")
         return
 
     file_name = msg.document.file_name
     if not file_name.endswith(".py"):
-        bot.reply_to(msg, "❌ Отправь файл с расширением .py")
+        bot.reply_to(msg, "Отправь файл с расширением .py")
         return
 
     token = pending_tokens.pop(user_id)
-    status_msg = bot.reply_to(msg, "📥 Скачиваю файл...")
+    status_msg = bot.reply_to(msg, "Скачиваю файл...")
 
     try:
         file_info = bot.get_file(msg.document.file_id)
@@ -208,7 +206,7 @@ def handle_file(msg: types.Message):
         code = downloaded_file.decode("utf-8")
 
         if not code.strip():
-            bot.edit_message_text("❌ Файл пустой!", msg.chat.id, status_msg.message_id)
+            bot.edit_message_text("Файл пустой!", msg.chat.id, status_msg.message_id)
             return
 
         dangerous = ["os.system", "subprocess", "eval(", "exec(", "__import__", 
@@ -216,10 +214,9 @@ def handle_file(msg: types.Message):
         for danger in dangerous:
             if danger in code:
                 bot.edit_message_text(
-                    f"❌ Обнаружен опасный код: `{danger}`",
+                    f"❌ Опасный код: {danger}",
                     msg.chat.id,
-                    status_msg.message_id,
-                    parse_mode="Markdown"
+                    status_msg.message_id
                 )
                 return
 
@@ -238,15 +235,12 @@ def handle_file(msg: types.Message):
 
         if result["success"]:
             bot.edit_message_text(
-                f"✅ **Бот запущен!**\n\n"
-                f"👤 @{bot_name}\n"
-                f"📄 Файл: `{file_name}`\n\n"
-                f"Команды:\n"
-                f"/stop — остановить\n"
-                f"/status — статус",
+                f"✅ Бот запущен!\n\n"
+                f"@{bot_name}\n"
+                f"Файл: {file_name}\n\n"
+                f"/stop /status",
                 msg.chat.id,
-                status_msg.message_id,
-                parse_mode="Markdown"
+                status_msg.message_id
             )
         else:
             bot.edit_message_text(
@@ -267,7 +261,7 @@ def stop_command(msg: types.Message):
     user_id = msg.from_user.id
 
     if user_id not in running_bots:
-        bot.reply_to(msg, "❌ Нет запущенных ботов")
+        bot.reply_to(msg, "Нет запущенных ботов")
         return
 
     stop_user_bot(user_id)
@@ -278,7 +272,7 @@ def status_command(msg: types.Message):
     user_id = msg.from_user.id
 
     if user_id not in running_bots:
-        bot.reply_to(msg, "❌ Нет запущенных ботов")
+        bot.reply_to(msg, "Нет запущенных ботов")
         return
 
     bot_data = running_bots[user_id]
@@ -286,14 +280,14 @@ def status_command(msg: types.Message):
     hours, rem = divmod(int(uptime), 3600)
     minutes, seconds = divmod(rem, 60)
 
-    bot.reply_to(msg,
-        f"📊 **Статус**\n\n"
-        f"👤 Бот: @{bot_data.get('bot_username', '?')}\n"
-        f"📌 Статус: `{bot_data['status']}`\n"
-        f"⏱ Аптайм: {hours}ч {minutes}м {seconds}с\n"
-        f"📄 Файл: `{Path(bot_data.get('bot_file', '?')).name}`",
-        parse_mode="Markdown"
+    text = (
+        f"Статус\n\n"
+        f"Бот: @{bot_data.get('bot_username', '?')}\n"
+        f"Статус: {bot_data['status']}\n"
+        f"Аптайм: {hours}ч {minutes}м {seconds}с\n"
+        f"Файл: {Path(bot_data.get('bot_file', '?')).name}"
     )
+    bot.reply_to(msg, text)
 
 # ============================================================
 # FLASK ДЛЯ RENDER
@@ -315,8 +309,12 @@ def run_flask():
 
 if __name__ == "__main__":
     print("=" * 40)
-    print("Бот-Хостер v4.0")
+    print("Бот-Хостер v4.1")
     print("=" * 40)
+
+    # Удаляем старые сессии
+    bot.remove_webhook()
+    time.sleep(0.5)
 
     threading.Thread(target=run_flask, daemon=True).start()
 
