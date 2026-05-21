@@ -1,3 +1,2 @@
 flask
-pyrogram>=2.0
-tgcrypto
+pyTelegramBotAPI
