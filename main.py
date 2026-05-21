@@ -12,22 +12,17 @@ from pyrogram.errors import AccessTokenInvalid, ApiIdInvalid, Unauthorized
 from pyrogram.types import Message
 
 # ============================================================
-# КОНФИГУРАЦИЯ
+# ⚠️ ВСТАВЬ СВОИ ДАННЫЕ СЮДА ⚠️
 # ============================================================
-HOST_BOT_TOKEN = os.environ.get("HOST_BOT_TOKEN", "ТОКЕН_ТВОЕГО_ХОСТ_БОТА")
-API_ID = int(os.environ.get("API_ID", "12345"))
-API_HASH = os.environ.get("API_HASH", "ТВОЙ_API_HASH")
+HOST_BOT_TOKEN = "8867884169:AAG-UkjVW4SThLxFcL7pzt6NweKrz_1RQFI"
+API_ID = 34944645
+API_HASH = "33ff1004a149671057f2e0fa8e6b4aaf"
+# ============================================================
 
-# Папка для кода пользовательских ботов
 BOTS_DIR = Path("hosted_bots")
 BOTS_DIR.mkdir(exist_ok=True)
 
-# Хранилище запущенных ботов
 running_bots: Dict[int, Dict] = {}
-
-# ============================================================
-# ПРОВЕРКА ТОКЕНА
-# ============================================================
 
 async def check_token(token: str) -> dict:
     result = {
@@ -74,10 +69,6 @@ async def check_token(token: str) -> dict:
 
     return result
 
-# ============================================================
-# ЗАПУСК БОТА
-# ============================================================
-
 def load_bot_code(user_id: int, code: str) -> Path:
     bot_file = BOTS_DIR / f"bot_{user_id}.py"
     bot_file.write_text(code, encoding="utf-8")
@@ -112,7 +103,7 @@ async def run_user_bot(user_id: int, token: str, code: str) -> dict:
             running_bots[user_id]["bot_name"] = bot_info.first_name
             running_bots[user_id]["bot_username"] = bot_info.username
 
-            print(f"✅ Бот @{bot_info.username} (юзер {user_id}) запущен")
+            print(f"Бот @{bot_info.username} запущен")
 
             while user_id in running_bots:
                 await asyncio.sleep(1)
@@ -120,7 +111,7 @@ async def run_user_bot(user_id: int, token: str, code: str) -> dict:
         except Exception as e:
             running_bots[user_id]["status"] = "crashed"
             running_bots[user_id]["error"] = str(e)[:200]
-            print(f"❌ Бот юзера {user_id} упал: {e}")
+            print(f"Бот упал: {e}")
 
         finally:
             try:
@@ -162,10 +153,6 @@ async def stop_user_bot(user_id: int) -> bool:
 
     return True
 
-# ============================================================
-# ХОСТ-БОТ
-# ============================================================
-
 host_app = Client(
     "host_bot",
     api_id=API_ID,
@@ -176,9 +163,8 @@ host_app = Client(
 @host_app.on_message(filters.command("start"))
 async def start_command(_, msg: Message):
     await msg.reply(
-        "🤖 **Бот-хостер**\n\n"
-        "Команды:\n"
-        "/check `токен` — проверить токен\n"
+        "🤖 Бот-хостер\n\n"
+        "/check токен — проверить токен\n"
         "/host — загрузить код бота\n"
         "/stop — остановить бота\n"
         "/status — статус бота"
@@ -188,28 +174,23 @@ async def start_command(_, msg: Message):
 async def check_command(_, msg: Message):
     token = msg.text.replace("/check", "").strip()
     if not token:
-        await msg.reply("❌ Укажи токен: `/check 123456:ABC-DEF`")
+        await msg.reply("Укажи токен: /check 123456:ABC-DEF")
         return
 
-    status_msg = await msg.reply("🔍 Проверяю...")
+    status_msg = await msg.reply("Проверяю...")
     result = await check_token(token)
 
     if result["valid"]:
-        text = (
-            f"✅ **Токен валиден!**\n\n"
-            f"👤 {result['bot_name']}\n"
-            f"🔖 @{result['bot_username']}\n"
-            f"🆔 `{result['bot_id']}`"
-        )
+        text = f"Токен валиден! Бот: @{result['bot_username']}"
     else:
-        text = f"❌ {result['error']}"
+        text = f"Ошибка: {result['error']}"
 
     await status_msg.edit(text)
 
 @host_app.on_message(filters.command("host"))
 async def host_command(_, msg: Message):
     await msg.reply(
-        "📤 Отправь:\n\n"
+        "Отправь:\n\n"
         "/upload\nТОКЕН\n```python\nКОД\n```"
     )
 
@@ -221,7 +202,7 @@ async def upload_bot(_, msg: Message):
     lines = text.split("\n")
 
     if len(lines) < 3:
-        await msg.reply("❌ Неверный формат")
+        await msg.reply("Неверный формат")
         return
 
     token = lines[0].strip()
@@ -233,21 +214,15 @@ async def upload_bot(_, msg: Message):
             raise ValueError("Код не найден")
         code = text[code_start:code_end].strip()
     except:
-        await msg.reply("❌ Код должен быть в ```python ... ```")
+        await msg.reply("Код должен быть в ```python ... ```")
         return
 
-    status_msg = await msg.reply("🔍 Проверяю...")
+    status_msg = await msg.reply("Проверяю...")
     check = await check_token(token)
 
     if not check["valid"]:
-        await status_msg.edit(f"❌ {check['error']}")
+        await status_msg.edit(f"Ошибка: {check['error']}")
         return
-
-    dangerous = ["os.system", "subprocess", "eval(", "exec(", "__import__"]
-    for danger in dangerous:
-        if danger in code:
-            await status_msg.edit(f"❌ Опасный код: `{danger}`")
-            return
 
     if "from pyrogram" not in code:
         code = "from pyrogram import Client, filters\nimport asyncio\n\n" + code
@@ -255,33 +230,29 @@ async def upload_bot(_, msg: Message):
     if "app.run()" not in code:
         code += "\n\napp.run()"
 
-    await status_msg.edit(f"✅ Запускаю @{check['bot_username']}...")
+    await status_msg.edit(f"Запускаю @{check['bot_username']}...")
     result = await run_user_bot(user_id, token, code)
 
     if result["success"]:
-        await status_msg.edit(
-            f"✅ **Бот запущен!**\n\n"
-            f"@{check['bot_username']}\n"
-            f"/stop /status"
-        )
+        await status_msg.edit(f"Бот запущен! /stop /status")
 
 @host_app.on_message(filters.command("stop"))
 async def stop_bot(_, msg: Message):
     user_id = msg.from_user.id
 
     if user_id not in running_bots:
-        await msg.reply("❌ Нет запущенных ботов")
+        await msg.reply("Нет запущенных ботов")
         return
 
-    stopped = await stop_user_bot(user_id)
-    await msg.reply("✅ Бот остановлен" if stopped else "❌ Ошибка")
+    await stop_user_bot(user_id)
+    await msg.reply("Бот остановлен")
 
 @host_app.on_message(filters.command("status"))
 async def status_bot(_, msg: Message):
     user_id = msg.from_user.id
 
     if user_id not in running_bots:
-        await msg.reply("❌ Нет запущенных ботов")
+        await msg.reply("Нет запущенных ботов")
         return
 
     bot = running_bots[user_id]
@@ -290,43 +261,23 @@ async def status_bot(_, msg: Message):
     minutes, seconds = divmod(rem, 60)
 
     await msg.reply(
-        f"📊 **Статус**\n\n"
-        f"👤 @{bot.get('bot_username', '?')}\n"
-        f"📌 {bot['status']}\n"
-        f"⏱ {hours}ч {minutes}м {seconds}с"
+        f"Статус\n"
+        f"Бот: @{bot.get('bot_username', '?')}\n"
+        f"Статус: {bot['status']}\n"
+        f"Аптайм: {hours}ч {minutes}м {seconds}с"
     )
-
-# ============================================================
-# АВТО-ВОССТАНОВЛЕНИЕ
-# ============================================================
-
-async def health_check():
-    while True:
-        for user_id, bot_data in list(running_bots.items()):
-            if bot_data["status"] == "crashed":
-                print(f"⚠️ Бот юзера {user_id} упал")
-        await asyncio.sleep(30)
-
-# ============================================================
-# ЗАПУСК ВСЕГО
-# ============================================================
 
 async def main():
     BOTS_DIR.mkdir(exist_ok=True)
-    asyncio.create_task(health_check())
 
-    print("🚀 Запуск хост-бота...")
+    print("Запуск...")
     await host_app.start()
     me = await host_app.get_me()
-    print(f"✅ @{me.username} запущен")
+    print(f"Бот @{me.username} запущен")
 
-    # Бесконечно держим бота живым
     await asyncio.Event().wait()
 
-# ============================================================
-# FLASK ДЛЯ RENDER
-# ============================================================
-
+# Flask для Render
 flask_app = Flask(__name__)
 
 @flask_app.route("/")
@@ -337,20 +288,9 @@ def run_flask():
     port = int(os.environ.get("PORT", 8080))
     flask_app.run(host="0.0.0.0", port=port)
 
-# ============================================================
-# ТОЧКА ВХОДА
-# ============================================================
-
 if __name__ == "__main__":
-    print("=" * 50)
-    print("🤖 Бот-Хостер на Render")
-    print("=" * 50)
-
-    # Запускаем Flask в отдельном потоке
     threading.Thread(target=run_flask, daemon=True).start()
-
-    # Запускаем асинхронного бота
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n⏹ Остановка...")
+        print("Остановка...")
