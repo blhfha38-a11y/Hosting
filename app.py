@@ -592,12 +592,10 @@ def run_flask():
 
 if __name__ == "__main__":
     print("=" * 40)
-    print("Бот-Хостер v3.0 (telebot)")
+    print("Бот-Хостер v4.0 (файлы)")
     print("=" * 40)
 
-    # Flask в отдельном потоке
     threading.Thread(target=run_flask, daemon=True).start()
 
-    # Запуск хост-бота
     print("Запуск...")
-    bot.infinity_polling(timeout=10, long_polling_timeout=5) 
+    bot.infinity_polling(timeout=10, long_polling_timeout=5)
